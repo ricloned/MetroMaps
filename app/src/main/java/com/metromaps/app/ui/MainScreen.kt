@@ -376,8 +376,9 @@ private fun RouteVariants(vm: MetroViewModel) {
     val st = LocalMetro.current
     val net = vm.network ?: return
     val shape = RoundedCornerShape(st.corner.dp)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        Modifier.weight(1f).horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         vm.routes.forEachIndexed { i, r ->
@@ -401,6 +402,16 @@ private fun RouteVariants(vm: MetroViewModel) {
                 MText(if (r.tag.isNotBlank()) r.tag else "${r.transfers} пер.", size = 11.sp, color = fg.copy(alpha = 0.8f), maxLines = 1)
             }
         }
+    }
+    // закрыть маршрут: убирает и маршрут, и точки «Откуда»/«Куда»
+    Spacer(Modifier.width(8.dp))
+    Box(
+        Modifier.size(40.dp).clip(CircleShape).background(Color(st.panelText).copy(alpha = 0.1f))
+            .clickable { vm.clearRoute() },
+        contentAlignment = Alignment.Center
+    ) {
+        MText("✕", size = 18.sp, weight = FontWeight.Bold)
+    }
     }
     Spacer(Modifier.height(8.dp))
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
