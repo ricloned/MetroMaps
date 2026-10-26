@@ -71,6 +71,14 @@ class MetroViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var routeIndex by mutableIntStateOf(0)
         private set
+    var showCars by mutableStateOf(sp.getBoolean("showCars", true))
+        private set
+
+    fun changeShowCars(v: Boolean) {
+        showCars = v
+        sp.edit().putBoolean("showCars", v).apply()
+    }
+
     var avoidMck by mutableStateOf(sp.getBoolean("avoidMck", false))
         private set
     var avoidMcd by mutableStateOf(sp.getBoolean("avoidMcd", false))

@@ -167,6 +167,7 @@ fun SettingsScreen(vm: MetroViewModel) {
             SettingRow("Стиль схемы", st.name) { vm.screen = Screen.STYLES }
             SettingRow("Язык схемы", if (vm.latin) "Латиница" else "Русский") { vm.changeLatin(!vm.latin) }
             Divider()
+            ToggleRow("Подсказка вагонов", vm.showCars, "в какой вагон садиться для пересадки (примерно, по расположению станций)") { vm.changeShowCars(it) }
             ToggleRow("Проверять обновления", vm.autoUpdate, "при запуске смотреть новый релиз на GitHub") { vm.changeAutoUpdate(it) }
             val status = when (vm.updateState) {
                 UpdateState.CHECKING -> "проверяю…"

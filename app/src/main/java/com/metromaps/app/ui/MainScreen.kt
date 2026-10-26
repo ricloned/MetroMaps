@@ -51,6 +51,8 @@ import androidx.core.content.ContextCompat
 import com.metromaps.app.MetroViewModel
 import com.metromaps.app.Screen
 import com.metromaps.app.UpdateState
+import com.metromaps.app.data.Cars
+import com.metromaps.app.data.CarHint
 import com.metromaps.app.data.Leg
 import com.metromaps.app.data.Route
 import com.metromaps.app.style.MetroStyles
@@ -304,8 +306,8 @@ private fun RouteSummary(vm: MetroViewModel, r: Route) {
         MText("$trText · прибытие ~$arrive", size = 13.sp, color = Color(st.dim), modifier = Modifier.padding(bottom = 5.dp))
     }
     Spacer(Modifier.height(8.dp))
-    Column(Modifier.heightIn(max = 150.dp).verticalScroll(rememberScrollState())) {
-        for (leg in r.legs) {
+    Column(Modifier.heightIn(max = 210.dp).verticalScroll(rememberScrollState())) {
+        r.legs.forEachIndexed { li, leg ->
             when (leg) {
                 is Leg.Ride -> {
                     val line = net.lines[leg.line]
@@ -318,6 +320,12 @@ private fun RouteSummary(vm: MetroViewModel, r: Route) {
                             val n = leg.stations.size - 1
                             MText("${vm.lineName(line.idx)} · $n ${plural(n, "перегон", "перегона", "перегонов")} · ${leg.minutes.roundToInt()} мин",
                                 size = 12.sp, color = Color(st.dim), maxLines = 1)
+                            if (vm.showCars) {
+                                val hint = Cars.hint(net, leg, r.legs.getOrNull(li + 1))
+                                Spacer(Modifier.height(4.dp))
+                                TrainView(hint, MetroStyles.lineColor(st, line.color, line.idx))
+                                MText(hint.text, size = 11.sp, color = Color(st.dim), maxLines = 1)
+                            }
                         }
                     }
                 }
@@ -428,5 +436,28 @@ private fun AvoidChip(text: String, on: Boolean, onClick: () -> Unit) {
             .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
         MText((if (on) "✓ " else "") + text, size = 13.sp, color = if (on) Color(st.onAccent) else Color(st.panelText))
+    }
+}
+
+/** Поезд из вагонов: рекомендованные выделены цветом линии; без разницы — выделен весь. Голова справа. */
+@Composable
+private fun TrainView(h: CarHint, lineColor: Int) {
+    val st = LocalMetro.current
+    val on = Color(lineColor)
+    val off = Color(st.panelText).copy(alpha = 0.12f)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        for (k in h.cars downTo 1) {
+            val sel = h.best == null || k in h.best
+            val head = k == 1
+            Box(
+                Modifier
+                    .padding(end = 2.dp)
+                    .size(width = if (h.cars > 8) 15.dp else 19.dp, height = 11.dp)
+                    .clip(RoundedCornerShape(topStart = 2.dp, bottomStart = 2.dp, topEnd = if (head) 6.dp else 2.dp, bottomEnd = if (head) 6.dp else 2.dp))
+                    .background(if (sel) on else off)
+            )
+        }
+        Spacer(Modifier.width(4.dp))
+        MText("→", size = 12.sp, color = Color(st.dim))
     }
 }
