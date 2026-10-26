@@ -143,7 +143,8 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
         val zoomK = scale / fitScale
         // линии тонкие на общем виде и толще при приближении, как в навигаторах
         val lw = st.lineWidth * density * (0.3f + 0.3f * sqrt(zoomK)).coerceIn(0.5f, 1.5f)
-        fun sp(i: Int): Offset {
+        fun sp(i: Int): Offset = Offset(offset.x + net.drawX[i] * scale, offset.y + net.drawY[i] * scale)
+        fun cp(i: Int): Offset {
             val s = net.stations[i]
             return Offset(offset.x + s.x * scale, offset.y + s.y * scale)
         }
@@ -159,19 +160,23 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
         val fade = if (route != null) 0.16f else 1f
         val cap = if (st.squareCaps) StrokeCap.Square else StrokeCap.Round
 
-        // --- линии ---
-        for (pass in 0..1) {
-            for (l in net.lines) {
-                val col = Color(MetroStyles.lineColor(st, l.color, l.idx))
-                for ((a, b) in l.segments) {
-                    val inRoute = key(a, b) in routeSegs
-                    if ((pass == 0) == inRoute) continue
-                    val alpha = if (inRoute || route == null) 1f else fade
-                    val pa = sp(a); val pb = sp(b)
-                    if (st.glow) drawLine(col.copy(alpha = 0.25f * alpha), pa, pb, lw * 3f, cap)
-                    drawLine(col.copy(alpha = alpha), pa, pb, if (inRoute) lw * 1.25f else lw, cap)
-                }
-            }
+        // --- линии: плавные кривые через станции ---
+        val strokeBase = Stroke(width = lw, cap = cap, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+        val strokeGlow = Stroke(width = lw * 3f, cap = cap, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+        val lineAlpha = if (route == null) 1f else fade
+        for (ch in net.chains) {
+            val col = Color(MetroStyles.lineColor(st, net.lines[ch.line].color, ch.line))
+            val path = smoothPath(ch.stations, ch.closed, ::cp)
+            if (st.glow) drawPath(path, col.copy(alpha = 0.25f * lineAlpha), style = strokeGlow)
+            drawPath(path, col.copy(alpha = lineAlpha), style = strokeBase)
+        }
+        // выбранный маршрут — поверх, ярко
+        route?.legs?.forEach { leg ->
+            if (leg !is Leg.Ride) return@forEach
+            val col = Color(MetroStyles.lineColor(st, net.lines[leg.line].color, leg.line))
+            val path = smoothPath(leg.stations.toIntArray(), false, ::cp)
+            if (st.glow) drawPath(path, col.copy(alpha = 0.3f), style = Stroke(width = lw * 3.4f, cap = cap, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            drawPath(path, col, style = Stroke(width = lw * 1.3f, cap = cap, join = androidx.compose.ui.graphics.StrokeJoin.Round))
         }
 
         // --- пересадки ---
@@ -222,13 +227,42 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
     }
 }
 
+/** Плавная кривая через точки: квадратичные Безье через середины отрезков. */
+private fun smoothPath(ids: IntArray, closed: Boolean, sp: (Int) -> Offset): Path {
+    val path = Path()
+    val n = ids.size
+    if (n == 0) return path
+    val p = Array(n) { sp(ids[it]) }
+    fun mid(a: Offset, b: Offset) = Offset((a.x + b.x) / 2, (a.y + b.y) / 2)
+    if (closed && n >= 3) {
+        val start = mid(p[n - 1], p[0])
+        path.moveTo(start.x, start.y)
+        for (k in 0 until n) {
+            val e = mid(p[k], p[(k + 1) % n])
+            path.quadraticBezierTo(p[k].x, p[k].y, e.x, e.y)
+        }
+        path.close()
+        return path
+    }
+    path.moveTo(p[0].x, p[0].y)
+    if (n == 2) {
+        path.lineTo(p[1].x, p[1].y)
+        return path
+    }
+    for (k in 1 until n - 1) {
+        val e = if (k == n - 2) p[n - 1] else mid(p[k], p[k + 1])
+        path.quadraticBezierTo(p[k].x, p[k].y, e.x, e.y)
+    }
+    return path
+}
+
 private fun key(a: Int, b: Int): Long = if (a < b) (a.toLong() shl 32) or b.toLong() else (b.toLong() shl 32) or a.toLong()
 
 private fun nearestOnScreen(net: Network, p: Offset, scale: Float, offset: Offset, maxDist: Float): Int? {
     var best: Int? = null
     var bd = maxDist
     for (s in net.stations) {
-        val d = hypot(offset.x + s.x * scale - p.x, offset.y + s.y * scale - p.y)
+        val d = hypot(offset.x + net.drawX[s.idx] * scale - p.x, offset.y + net.drawY[s.idx] * scale - p.y)
         if (d < bd) { bd = d; best = s.idx }
     }
     return best

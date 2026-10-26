@@ -36,6 +36,9 @@ data class Station(
 
 enum class EdgeKind { RIDE, TRANSFER }
 
+/** Непрерывный кусок линии без развилок — рисуется одной плавной кривой. */
+class Chain(val line: Int, val stations: IntArray, val closed: Boolean)
+
 data class Edge(val to: Int, val minutes: Double, val kind: EdgeKind)
 
 /** Схема метро одного города: станции, линии, пересадки и граф для маршрутов. */
@@ -47,6 +50,7 @@ class Network(
     val transfers: List<Pair<Int, Int>>,
     val adj: List<List<Edge>>,
     val links: List<Pair<Int, Int>>,
+    val chains: List<Chain>,
     val width: Float,
     val height: Float
 ) {
@@ -62,6 +66,26 @@ class Network(
             if (ra != rb) g[maxOf(ra, rb)] = minOf(ra, rb)
         }
         for (i in g.indices) g[i] = find(i)
+    }
+
+    /** Где рисовать станцию: точка на плавной кривой линии (а не контрольная точка). */
+    val drawX = FloatArray(stations.size) { stations[it].x }
+    val drawY = FloatArray(stations.size) { stations[it].y }
+
+    init {
+        for (ch in chains) {
+            val ids = ch.stations
+            val n = ids.size
+            if (n < 3) continue
+            for (k in 0 until n) {
+                if (!ch.closed && (k == 0 || k == n - 1)) continue
+                val a = stations[ids[(k - 1 + n) % n]]
+                val b = stations[ids[k]]
+                val c = stations[ids[(k + 1) % n]]
+                drawX[b.idx] = 0.125f * (a.x + c.x) + 0.75f * b.x
+                drawY[b.idx] = 0.125f * (a.y + c.y) + 0.75f * b.y
+            }
+        }
     }
 
     private val transferSet: Set<Int> = transfers.flatMap { listOf(it.first, it.second) }.toHashSet()
@@ -137,7 +161,7 @@ object MetroParser {
         }
         // отбрасываем станции с битыми координатами (далеко от остального города)
         val allRaw = rawLines.flatMap { it.second }
-        if (allRaw.isEmpty()) return Network(city.optString("id"), city.optString("name").trim(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1000f, 1000f)
+        if (allRaw.isEmpty()) return Network(city.optString("id"), city.optString("name").trim(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1000f, 1000f)
         val mLat = allRaw.map { it.lat }.sorted().let { it[it.size / 2] }
         val mLon = allRaw.map { it.lon }.sorted().let { it[it.size / 2] }
         val clean = rawLines.map { (l, list) -> l to list.filter { Geo.dist(it.lat, it.lon, mLat, mLon) < 120_000 } }
@@ -219,7 +243,7 @@ object MetroParser {
             adj[b] += Edge(a, t, EdgeKind.TRANSFER)
         }
         return Network(
-            city.optString("id"), city.optString("name").trim(), lines, placed, transfers, adj, links,
+            city.optString("id"), city.optString("name").trim(), lines, placed, transfers, adj, links, chains(lines),
             ((maxX - minX) * sc).toFloat() + 2 * margin,
             ((maxY - minY) * sc).toFloat() + 2 * margin
         )
@@ -259,6 +283,45 @@ object MetroParser {
         val ring = k > 6 && leaves.size == 2 && (ringName || d(leaves[0], leaves[1]) < 2.5 * median)
         if (ring) segs += leaves[0] to leaves[1]
         return segs to ring
+    }
+
+    /** Разбивает каждую линию на куски между развилками/концами. Кольцо — замкнутый кусок. */
+    private fun chains(lines: List<Line>): List<Chain> {
+        val out = ArrayList<Chain>()
+        for (l in lines) {
+            val adj = HashMap<Int, ArrayList<Int>>()
+            for ((a, b) in l.segments) {
+                adj.getOrPut(a) { ArrayList() } += b
+                adj.getOrPut(b) { ArrayList() } += a
+            }
+            val used = HashSet<Long>()
+            fun k(a: Int, b: Int) = if (a < b) (a.toLong() shl 32) or b.toLong() else (b.toLong() shl 32) or a.toLong()
+            fun walk(s: Int, n: Int): ArrayList<Int> {
+                val ch = arrayListOf(s, n)
+                used += k(s, n)
+                var prev = s
+                var cur = n
+                while (adj[cur]?.size == 2) {
+                    val nb = adj[cur]!!
+                    val nx = if (nb[0] == prev) nb[1] else nb[0]
+                    if (k(cur, nx) in used) break
+                    used += k(cur, nx)
+                    ch += nx
+                    prev = cur; cur = nx
+                }
+                return ch
+            }
+            for ((s, nbs) in adj) if (nbs.size != 2) for (n in nbs) if (k(s, n) !in used) {
+                out += Chain(l.idx, walk(s, n).toIntArray(), false)
+            }
+            for ((a, b) in l.segments) if (k(a, b) !in used) {
+                val ch = walk(a, b)
+                val closed = ch.first() == ch.last()
+                if (closed) ch.removeAt(ch.lastIndex)
+                out += Chain(l.idx, ch.toIntArray(), closed)
+            }
+        }
+        return out
     }
 
     private fun transferLinks(st: List<Station>, transfers: List<Pair<Int, Int>>): List<Pair<Int, Int>> {

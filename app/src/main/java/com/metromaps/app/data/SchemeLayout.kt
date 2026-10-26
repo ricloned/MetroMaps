@@ -105,8 +105,8 @@ object SchemeLayout {
                 if (nbi.size != 2) continue
                 val mx = (x[nbi[0]] + x[nbi[1]]) / 2
                 val my = (y[nbi[0]] + y[nbi[1]]) / 2
-                x[i] += (mx - x[i]) * 0.15
-                y[i] += (my - y[i]) * 0.15
+                x[i] += (mx - x[i]) * 0.25
+                y[i] += (my - y[i]) * 0.25
             }
 
             // кольцевые линии → окружности

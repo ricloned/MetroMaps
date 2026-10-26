@@ -66,6 +66,15 @@ class MetroViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var route by mutableStateOf<Route?>(null)
         private set
+    /** Все найденные варианты маршрута; route — выбранный из них. */
+    var routes by mutableStateOf<List<Route>>(emptyList())
+        private set
+    var routeIndex by mutableIntStateOf(0)
+        private set
+    var avoidMck by mutableStateOf(sp.getBoolean("avoidMck", false))
+        private set
+    var avoidMcd by mutableStateOf(sp.getBoolean("avoidMcd", false))
+        private set
     var picked by mutableStateOf<Int?>(null)
     var myStation by mutableStateOf<Int?>(null)
         private set
@@ -142,7 +151,7 @@ class MetroViewModel(app: Application) : AndroidViewModel(app) {
             val same = network?.cityId == net.cityId
             network = net
             if (!same) {
-                from = null; to = null; route = null; picked = null; myStation = null
+                from = null; to = null; route = null; routes = emptyList(); picked = null; myStation = null
                 fitStamp++
             }
         }
@@ -210,15 +219,36 @@ class MetroViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearRoute() {
-        from = null; to = null; route = null; picked = null
+        from = null; to = null; route = null; routes = emptyList(); picked = null
     }
 
     private fun recompute() {
         val net = network ?: return
         val a = from
         val b = to
-        route = if (a != null && b != null) Router.route(net, a, b) else null
+        routes = if (a != null && b != null) Router.variants(net, a, b, avoidMck, avoidMcd) else emptyList()
+        routeIndex = 0
+        route = routes.firstOrNull()
         if (route != null) fitStamp++
+    }
+
+    fun selectRoute(i: Int) {
+        val r = routes.getOrNull(i) ?: return
+        routeIndex = i
+        route = r
+        fitStamp++
+    }
+
+    fun toggleAvoidMck() {
+        avoidMck = !avoidMck
+        sp.edit().putBoolean("avoidMck", avoidMck).apply()
+        recompute()
+    }
+
+    fun toggleAvoidMcd() {
+        avoidMcd = !avoidMcd
+        sp.edit().putBoolean("avoidMcd", avoidMcd).apply()
+        recompute()
     }
 
     fun pick(i: Int?) {

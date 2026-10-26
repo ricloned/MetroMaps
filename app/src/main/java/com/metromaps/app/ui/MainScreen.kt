@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -209,6 +210,8 @@ private fun BottomPanel(vm: MetroViewModel) {
 
         val route = vm.route
         if (route != null && picked == null) {
+            RouteVariants(vm)
+            Spacer(Modifier.height(10.dp))
             RouteSummary(vm, route)
             Spacer(Modifier.height(10.dp))
         }
@@ -267,7 +270,7 @@ private fun RouteSummary(vm: MetroViewModel, r: Route) {
         MText("$trText · прибытие ~$arrive", size = 13.sp, color = Color(st.dim), modifier = Modifier.padding(bottom = 5.dp))
     }
     Spacer(Modifier.height(8.dp))
-    Column(Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState())) {
+    Column(Modifier.heightIn(max = 150.dp).verticalScroll(rememberScrollState())) {
         for (leg in r.legs) {
             when (leg) {
                 is Leg.Ride -> {
@@ -330,5 +333,55 @@ private fun LocateIcon(color: Color) {
         drawLine(color, Offset(w / 2, w * 0.82f), Offset(w / 2, w), 2.4.dp.toPx())
         drawLine(color, Offset(0f, w / 2), Offset(w * 0.18f, w / 2), 2.4.dp.toPx())
         drawLine(color, Offset(w * 0.82f, w / 2), Offset(w, w / 2), 2.4.dp.toPx())
+    }
+}
+
+/** Варианты маршрута карточками + переключатели «Без МЦК» / «Без МЦД». */
+@Composable
+private fun RouteVariants(vm: MetroViewModel) {
+    val st = LocalMetro.current
+    val net = vm.network ?: return
+    val shape = RoundedCornerShape(st.corner.dp)
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        vm.routes.forEachIndexed { i, r ->
+            val sel = i == vm.routeIndex
+            Column(
+                Modifier
+                    .clip(shape)
+                    .background(if (sel) Color(st.accent) else Color(st.panelText).copy(alpha = 0.07f))
+                    .clickable { vm.selectRoute(i) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+            ) {
+                val fg = if (sel) Color(st.onAccent) else Color(st.panelText)
+                MText("${r.minutes.roundToInt()} мин", size = 16.sp, weight = FontWeight.Bold, color = fg)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    for (l in r.lines.distinct().take(6)) {
+                        val line = net.lines[l]
+                        Box(Modifier.padding(end = 3.dp).size(width = 14.dp, height = 5.dp).clip(RoundedCornerShape(3.dp))
+                            .background(Color(MetroStyles.lineColor(st, line.color, line.idx))))
+                    }
+                }
+                MText(if (r.tag.isNotBlank()) r.tag else "${r.transfers} пер.", size = 11.sp, color = fg.copy(alpha = 0.8f), maxLines = 1)
+            }
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        AvoidChip("Без МЦК", vm.avoidMck) { vm.toggleAvoidMck() }
+        AvoidChip("Без МЦД", vm.avoidMcd) { vm.toggleAvoidMcd() }
+    }
+}
+
+@Composable
+private fun AvoidChip(text: String, on: Boolean, onClick: () -> Unit) {
+    val st = LocalMetro.current
+    Box(
+        Modifier.clip(RoundedCornerShape(50)).background(if (on) Color(st.accent) else Color(st.panelText).copy(alpha = 0.07f))
+            .clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        MText((if (on) "✓ " else "") + text, size = 13.sp, color = if (on) Color(st.onAccent) else Color(st.panelText))
     }
 }
