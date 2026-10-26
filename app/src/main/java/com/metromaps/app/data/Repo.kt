@@ -12,6 +12,16 @@ class Repo(ctx: Context) {
 
     fun cached(): String? = if (file.exists() && file.length() > 100) file.readText() else null
 
+    /** Готовая раскладка схемы города (считается один раз). */
+    fun loadLayout(cityId: String): LayoutCache? {
+        val f = File(file.parentFile, "layout_$cityId.json")
+        return if (f.exists()) LayoutCache.fromJson(f.readText()) else null
+    }
+
+    fun saveLayout(cityId: String, c: LayoutCache) {
+        runCatching { File(file.parentFile, "layout_$cityId.json").writeText(c.toJson()) }
+    }
+
     fun cacheAgeMs(): Long = if (file.exists()) System.currentTimeMillis() - file.lastModified() else Long.MAX_VALUE
 
     /** Блокирующий вызов — запускать в Dispatchers.IO. */

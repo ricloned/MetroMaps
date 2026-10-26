@@ -145,7 +145,15 @@ class MetroViewModel(app: Application) : AndroidViewModel(app) {
         val json = allJson ?: return
         val id = cityId
         val net = withContext(Dispatchers.Default) {
-            runCatching { MetroParser.cityJson(json, id)?.let { MetroParser.build(it) } }.getOrNull()
+            runCatching {
+                val cached = repo.loadLayout(id)
+                MetroParser.cityJson(json, id)?.let { c ->
+                    val n = MetroParser.build(c, cached)
+                    val fresh = MetroParser.lastLayout
+                    if (fresh != null && fresh.key != cached?.key) repo.saveLayout(id, fresh)
+                    n
+                }
+            }.getOrNull()
         }
         if (net != null) {
             val same = network?.cityId == net.cityId

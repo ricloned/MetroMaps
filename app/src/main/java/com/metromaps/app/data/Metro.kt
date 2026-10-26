@@ -42,6 +42,51 @@ class Chain(val line: Int, val stations: IntArray, val closed: Boolean)
 data class Edge(val to: Int, val minutes: Double, val kind: EdgeKind)
 
 /** Схема метро одного города: станции, линии, пересадки и граф для маршрутов. */
+fun dkey(a: Int, b: Int): Long = (a.toLong() shl 32) or (b.toLong() and 0xFFFFFFFFL)
+
+/** Кольцевая линия, нарисованная эллипсом (в координатах схемы). */
+class RingShape(val cx: Float, val cy: Float, val a: Float, val b: Float, val theta: Float) {
+    /** Параметр (угол) точки на эллипсе. */
+    fun param(x: Float, y: Float): Double {
+        val c = kotlin.math.cos(theta.toDouble()); val s = kotlin.math.sin(theta.toDouble())
+        val dx = x - cx; val dy = y - cy
+        val u = dx * c + dy * s; val v = -dx * s + dy * c
+        return kotlin.math.atan2(v / b, u / a)
+    }
+    fun point(t: Double): Pair<Float, Float> {
+        val c = kotlin.math.cos(theta.toDouble()); val s = kotlin.math.sin(theta.toDouble())
+        val u = a * kotlin.math.cos(t); val v = b * kotlin.math.sin(t)
+        return (cx + u * c - v * s).toFloat() to (cy + u * s + v * c).toFloat()
+    }
+}
+
+/** Сохранённая раскладка города — чтобы не считать заново при каждом запуске. */
+class LayoutCache(val key: String, val pos: DoubleArray, val ellipses: List<DoubleArray>) {
+    fun toJson(): String {
+        val o = JSONObject()
+        o.put("v", VERSION)
+        o.put("key", key)
+        o.put("pos", JSONArray().also { a -> pos.forEach { a.put(it) } })
+        o.put("ell", JSONArray().also { a -> ellipses.forEach { e -> a.put(JSONArray().also { q -> e.forEach { q.put(it) } }) } })
+        return o.toString()
+    }
+
+    companion object {
+        const val VERSION = 3
+        fun fromJson(s: String): LayoutCache? = runCatching {
+            val o = JSONObject(s)
+            if (o.optInt("v") != VERSION) return null
+            val p = o.getJSONArray("pos")
+            val e = o.getJSONArray("ell")
+            LayoutCache(
+                o.getString("key"),
+                DoubleArray(p.length()) { p.getDouble(it) },
+                List(e.length()) { i -> val q = e.getJSONArray(i); DoubleArray(q.length()) { q.getDouble(it) } }
+            )
+        }.getOrNull()
+    }
+}
+
 class Network(
     val cityId: String,
     val cityName: String,
@@ -51,6 +96,7 @@ class Network(
     val adj: List<List<Edge>>,
     val links: List<Pair<Int, Int>>,
     val chains: List<Chain>,
+    val rings: Map<Int, RingShape>,
     val width: Float,
     val height: Float
 ) {
@@ -68,24 +114,30 @@ class Network(
         for (i in g.indices) g[i] = find(i)
     }
 
-    /** Где рисовать станцию: точка на плавной кривой линии (а не контрольная точка). */
+    /** Где рисовать станцию (совпадает с позицией — кривые проходят через станции). */
     val drawX = FloatArray(stations.size) { stations[it].x }
     val drawY = FloatArray(stations.size) { stations[it].y }
 
-    init {
+    /** Для каждого перегона a→b: соседи по куску линии (prev, a, b, next) — для плавной кривой. */
+    val quads: Map<Long, IntArray> = HashMap<Long, IntArray>().also { m ->
         for (ch in chains) {
             val ids = ch.stations
             val n = ids.size
-            if (n < 3) continue
-            for (k in 0 until n) {
-                if (!ch.closed && (k == 0 || k == n - 1)) continue
-                val a = stations[ids[(k - 1 + n) % n]]
-                val b = stations[ids[k]]
-                val c = stations[ids[(k + 1) % n]]
-                drawX[b.idx] = 0.125f * (a.x + c.x) + 0.75f * b.x
-                drawY[b.idx] = 0.125f * (a.y + c.y) + 0.75f * b.y
+            val last = if (ch.closed) n else n - 1
+            for (k in 0 until last) {
+                val a = ids[k]; val b = ids[(k + 1) % n]
+                val p0 = if (ch.closed || k > 0) ids[(k - 1 + n) % n] else a
+                val p3 = if (ch.closed || k + 2 < n) ids[(k + 2) % n] else b
+                m[dkey(a, b)] = intArrayOf(p0, a, b, p3)
+                m[dkey(b, a)] = intArrayOf(p3, b, a, p0)
             }
         }
+    }
+
+    /** Станции одного пересадочного узла (вместе с самой станцией). */
+    fun groupOf(i: Int): List<Int> {
+        val gr = transferGroup[i]
+        return stations.indices.filter { transferGroup[it] == gr }
     }
 
     private val transferSet: Set<Int> = transfers.flatMap { listOf(it.first, it.second) }.toHashSet()
@@ -142,7 +194,10 @@ object MetroParser {
 
     private class RawSt(val id: String, val name: String, val lat: Double, val lon: Double, val order: Int)
 
-    fun build(city: JSONObject): Network {
+    /** Последняя посчитанная раскладка (для сохранения в кэш). */
+    @Volatile var lastLayout: LayoutCache? = null
+
+    fun build(city: JSONObject, cache: LayoutCache? = null): Network {
         val linesArr = city.optJSONArray("lines") ?: JSONArray()
         // 1. сырые данные
         val rawLines = ArrayList<Pair<JSONObject, List<RawSt>>>()
@@ -161,7 +216,7 @@ object MetroParser {
         }
         // отбрасываем станции с битыми координатами (далеко от остального города)
         val allRaw = rawLines.flatMap { it.second }
-        if (allRaw.isEmpty()) return Network(city.optString("id"), city.optString("name").trim(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), 1000f, 1000f)
+        if (allRaw.isEmpty()) return Network(city.optString("id"), city.optString("name").trim(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyList(), emptyMap(), 1000f, 1000f)
         val mLat = allRaw.map { it.lat }.sorted().let { it[it.size / 2] }
         val mLon = allRaw.map { it.lon }.sorted().let { it[it.size / 2] }
         val clean = rawLines.map { (l, list) -> l to list.filter { Geo.dist(it.lat, it.lon, mLat, mLon) < 120_000 } }
@@ -208,12 +263,20 @@ object MetroParser {
         }
 
         // 5. схематичная раскладка: ровные перегоны, без наложений, углы по 45°
-        val pos = SchemeLayout.layout(
-            stations.map { it.x.toDouble() to it.y.toDouble() },
-            lines.flatMap { it.segments },
-            transfers,
-            lines.filter { it.ring }.map { it.stations }
-        )
+        val ringLines = lines.filter { it.ring }
+        val key = stations.joinToString(",") { "${it.id}@${it.line}" }.hashCode().toString() + "/" + stations.size
+        val layout: LayoutResult = if (cache != null && cache.key == key && cache.pos.size == stations.size * 2) {
+            LayoutResult(List(stations.size) { cache.pos[2 * it] to cache.pos[2 * it + 1] }, cache.ellipses)
+        } else {
+            SchemeLayout.layout(
+                stations.map { it.x.toDouble() to it.y.toDouble() },
+                lines.flatMap { it.segments },
+                transfers,
+                ringLines.map { it.stations }
+            )
+        }
+        lastLayout = LayoutCache(key, DoubleArray(stations.size * 2) { if (it % 2 == 0) layout.pos[it / 2].first else layout.pos[it / 2].second }, layout.ellipses)
+        val pos = layout.pos
         val minX = pos.minOf { it.first }; val maxX = pos.maxOf { it.first }
         val minY = pos.minOf { it.second }; val maxY = pos.maxOf { it.second }
         val size = 1000.0
@@ -222,6 +285,15 @@ object MetroParser {
         val placed = stations.map { st ->
             val (x, y) = pos[st.idx]
             st.copy(x = margin + ((x - minX) * sc).toFloat(), y = margin + ((y - minY) * sc).toFloat())
+        }
+
+        val ringShapes = HashMap<Int, RingShape>()
+        ringLines.forEachIndexed { k, l ->
+            val e = layout.ellipses.getOrNull(k) ?: return@forEachIndexed
+            ringShapes[l.idx] = RingShape(
+                margin + ((e[0] - minX) * sc).toFloat(), margin + ((e[1] - minY) * sc).toFloat(),
+                (e[2] * sc).toFloat(), (e[3] * sc).toFloat(), e[4].toFloat()
+            )
         }
 
         // 6. связи внутри пересадочных узлов для рисования (без «паутины»)
@@ -243,7 +315,7 @@ object MetroParser {
             adj[b] += Edge(a, t, EdgeKind.TRANSFER)
         }
         return Network(
-            city.optString("id"), city.optString("name").trim(), lines, placed, transfers, adj, links, chains(lines),
+            city.optString("id"), city.optString("name").trim(), lines, placed, transfers, adj, links, chains(lines), ringShapes,
             ((maxX - minX) * sc).toFloat() + 2 * margin,
             ((maxY - minY) * sc).toFloat() + 2 * margin
         )

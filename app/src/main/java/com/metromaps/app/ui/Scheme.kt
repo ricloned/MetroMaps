@@ -31,6 +31,9 @@ import androidx.compose.ui.unit.IntSize
 import com.metromaps.app.MetroViewModel
 import com.metromaps.app.data.Leg
 import com.metromaps.app.data.Network
+import com.metromaps.app.data.RingShape
+import com.metromaps.app.data.dkey
+import kotlin.math.PI
 import com.metromaps.app.style.Fx
 import com.metromaps.app.style.MetroStyle
 import com.metromaps.app.style.MetroStyles
@@ -160,23 +163,26 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
         val fade = if (route != null) 0.16f else 1f
         val cap = if (st.squareCaps) StrokeCap.Square else StrokeCap.Round
 
-        // --- линии: плавные кривые через станции ---
-        val strokeBase = Stroke(width = lw, cap = cap, join = androidx.compose.ui.graphics.StrokeJoin.Round)
-        val strokeGlow = Stroke(width = lw * 3f, cap = cap, join = androidx.compose.ui.graphics.StrokeJoin.Round)
+        // --- линии: плавные кривые точно через станции, кольца — эллипсы ---
+        val join = androidx.compose.ui.graphics.StrokeJoin.Round
+        val strokeBase = Stroke(width = lw, cap = cap, join = join)
+        val strokeGlow = Stroke(width = lw * 3f, cap = cap, join = join)
         val lineAlpha = if (route == null) 1f else fade
+        fun w2s(x: Float, y: Float) = Offset(offset.x + x * scale, offset.y + y * scale)
         for (ch in net.chains) {
             val col = Color(MetroStyles.lineColor(st, net.lines[ch.line].color, ch.line))
-            val path = smoothPath(ch.stations, ch.closed, ::cp)
+            val ring = net.rings[ch.line]
+            val path = if (ch.closed && ring != null) ellipsePath(ring, ::w2s) else chainPath(net, ch.stations, ch.closed, ::sp)
             if (st.glow) drawPath(path, col.copy(alpha = 0.25f * lineAlpha), style = strokeGlow)
             drawPath(path, col.copy(alpha = lineAlpha), style = strokeBase)
         }
-        // выбранный маршрут — поверх, ярко
+        // выбранный маршрут — поверх, ярко, по той же кривой
         route?.legs?.forEach { leg ->
             if (leg !is Leg.Ride) return@forEach
             val col = Color(MetroStyles.lineColor(st, net.lines[leg.line].color, leg.line))
-            val path = smoothPath(leg.stations.toIntArray(), false, ::cp)
-            if (st.glow) drawPath(path, col.copy(alpha = 0.3f), style = Stroke(width = lw * 3.4f, cap = cap, join = androidx.compose.ui.graphics.StrokeJoin.Round))
-            drawPath(path, col, style = Stroke(width = lw * 1.3f, cap = cap, join = androidx.compose.ui.graphics.StrokeJoin.Round))
+            val path = legPath(net, leg.stations, net.rings[leg.line], ::sp, ::w2s)
+            if (st.glow) drawPath(path, col.copy(alpha = 0.3f), style = Stroke(width = lw * 3.4f, cap = cap, join = join))
+            drawPath(path, col, style = Stroke(width = lw * 1.3f, cap = cap, join = join))
         }
 
         // --- пересадки ---
@@ -227,31 +233,65 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
     }
 }
 
-/** Плавная кривая через точки: квадратичные Безье через середины отрезков. */
-private fun smoothPath(ids: IntArray, closed: Boolean, sp: (Int) -> Offset): Path {
+/** Кусок кривой Катмулла–Рома a→b (через станции), как кубическая Безье. */
+private fun Path.piece(q: IntArray, sp: (Int) -> Offset) {
+    val p0 = sp(q[0]); val p1 = sp(q[1]); val p2 = sp(q[2]); val p3 = sp(q[3])
+    val c1 = Offset(p1.x + (p2.x - p0.x) / 6f, p1.y + (p2.y - p0.y) / 6f)
+    val c2 = Offset(p2.x - (p3.x - p1.x) / 6f, p2.y - (p3.y - p1.y) / 6f)
+    cubicTo(c1.x, c1.y, c2.x, c2.y, p2.x, p2.y)
+}
+
+private fun chainPath(net: Network, ids: IntArray, closed: Boolean, sp: (Int) -> Offset): Path {
     val path = Path()
     val n = ids.size
-    if (n == 0) return path
-    val p = Array(n) { sp(ids[it]) }
-    fun mid(a: Offset, b: Offset) = Offset((a.x + b.x) / 2, (a.y + b.y) / 2)
-    if (closed && n >= 3) {
-        val start = mid(p[n - 1], p[0])
-        path.moveTo(start.x, start.y)
-        for (k in 0 until n) {
-            val e = mid(p[k], p[(k + 1) % n])
-            path.quadraticBezierTo(p[k].x, p[k].y, e.x, e.y)
+    if (n < 2) return path
+    val s0 = sp(ids[0])
+    path.moveTo(s0.x, s0.y)
+    val last = if (closed) n else n - 1
+    for (k in 0 until last) {
+        val a = ids[k]; val b = ids[(k + 1) % n]
+        val q = net.quads[dkey(a, b)]
+        if (q != null) path.piece(q, sp) else { val p = sp(b); path.lineTo(p.x, p.y) }
+    }
+    if (closed) path.close()
+    return path
+}
+
+private fun ellipsePath(r: RingShape, w2s: (Float, Float) -> Offset): Path {
+    val path = Path()
+    val steps = 96
+    for (k in 0..steps) {
+        val (x, y) = r.point(2 * PI * k / steps)
+        val p = w2s(x, y)
+        if (k == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y)
+    }
+    path.close()
+    return path
+}
+
+/** Участок маршрута по линии — точно по той же кривой/дуге, что и сама линия. */
+private fun legPath(net: Network, ids: List<Int>, ring: RingShape?, sp: (Int) -> Offset, w2s: (Float, Float) -> Offset): Path {
+    val path = Path()
+    if (ids.size < 2) return path
+    val s0 = sp(ids[0])
+    path.moveTo(s0.x, s0.y)
+    for (k in 1 until ids.size) {
+        val a = ids[k - 1]; val b = ids[k]
+        if (ring != null) {
+            val sa = net.stations[a]; val sb = net.stations[b]
+            val t0 = ring.param(sa.x, sa.y)
+            var dt = ring.param(sb.x, sb.y) - t0
+            while (dt > PI) dt -= 2 * PI
+            while (dt < -PI) dt += 2 * PI
+            for (j in 1..12) {
+                val (x, y) = ring.point(t0 + dt * j / 12)
+                val p = w2s(x, y)
+                path.lineTo(p.x, p.y)
+            }
+        } else {
+            val q = net.quads[dkey(a, b)]
+            if (q != null) path.piece(q, sp) else { val p = sp(b); path.lineTo(p.x, p.y) }
         }
-        path.close()
-        return path
-    }
-    path.moveTo(p[0].x, p[0].y)
-    if (n == 2) {
-        path.lineTo(p[1].x, p[1].y)
-        return path
-    }
-    for (k in 1 until n - 1) {
-        val e = if (k == n - 2) p[n - 1] else mid(p[k], p[k + 1])
-        path.quadraticBezierTo(p[k].x, p[k].y, e.x, e.y)
     }
     return path
 }
@@ -301,12 +341,12 @@ private fun DrawScope.drawLabels(
     halo: Paint,
     hasRoute: Boolean
 ) {
-    val ts = 7f * density * (0.85f + 0.3f * sqrt(zoomK)).coerceIn(0.9f, 1.7f)
+    val ts = 5.5f * density * (0.85f + 0.25f * sqrt(zoomK)).coerceIn(0.9f, 1.55f)
     text.textSize = ts
     halo.textSize = ts
     text.color = st.text
     halo.color = st.halo
-    halo.strokeWidth = 2f * density
+    halo.strokeWidth = 1.6f * density
 
     // приоритет: начало/конец, маршрут, пересадки, остальные
     val order = net.stations.indices.sortedBy { i ->

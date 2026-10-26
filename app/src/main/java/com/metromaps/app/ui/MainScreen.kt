@@ -200,6 +200,28 @@ private fun BottomPanel(vm: MetroViewModel) {
                     if (line != null) MText(vm.lineName(line.idx), size = 12.sp, color = Color(st.dim), maxLines = 1)
                 }
             }
+            // в пересадочном узле несколько станций (например, 4 «Нижегородских») — выбираем линию
+            val group = net?.groupOf(picked) ?: emptyList()
+            if (net != null && group.size > 1) {
+                Spacer(Modifier.height(8.dp))
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (m in group) {
+                        val ml = net.lines[net.stations[m].line]
+                        val sel = m == picked
+                        Row(
+                            Modifier.clip(RoundedCornerShape(50))
+                                .background(if (sel) Color(st.accent) else Color(st.panelText).copy(alpha = 0.07f))
+                                .clickable { vm.pick(m) }.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            LineDot(MetroStyles.lineColor(st, ml.color, ml.idx), 10.dp)
+                            Spacer(Modifier.width(6.dp))
+                            MText(vm.lineName(ml.idx), size = 12.sp, maxLines = 1,
+                                color = if (sel) Color(st.onAccent) else Color(st.panelText))
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MButton("Отсюда", { vm.chooseFrom(picked) }, Modifier.weight(1f), primary = true)
@@ -217,10 +239,10 @@ private fun BottomPanel(vm: MetroViewModel) {
         }
 
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Field(vm.from?.let { vm.name(it) }, "Откуда", st.markA, Modifier.weight(1f),
+            Field(vm.from?.let { vm.name(it) }, "Откуда", st.markA, Modifier.weight(1f), lineColorOf(vm, vm.from),
                 onClick = { vm.screen = Screen.SEARCH_FROM }, onClear = { vm.chooseFrom(null) })
             Spacer(Modifier.width(8.dp))
-            Field(vm.to?.let { vm.name(it) }, "Куда", st.markB, Modifier.weight(1f),
+            Field(vm.to?.let { vm.name(it) }, "Куда", st.markB, Modifier.weight(1f), lineColorOf(vm, vm.to),
                 onClick = { vm.screen = Screen.SEARCH_TO }, onClear = { vm.chooseTo(null) })
             Spacer(Modifier.width(6.dp))
             Box(Modifier.size(40.dp).clip(CircleShape).clickable { vm.swap() }, contentAlignment = Alignment.Center) {
@@ -231,7 +253,14 @@ private fun BottomPanel(vm: MetroViewModel) {
 }
 
 @Composable
-private fun Field(value: String?, hint: String, dot: Int, modifier: Modifier, onClick: () -> Unit, onClear: () -> Unit) {
+private fun lineColorOf(vm: MetroViewModel, i: Int?): Int? {
+    val net = vm.network ?: return null
+    val s = net.stations.getOrNull(i ?: return null) ?: return null
+    return MetroStyles.lineColor(vm.style, net.lines[s.line].color, s.line)
+}
+
+@Composable
+private fun Field(value: String?, hint: String, dot: Int, modifier: Modifier, lineColor: Int?, onClick: () -> Unit, onClear: () -> Unit) {
     val st = LocalMetro.current
     Row(
         modifier.clip(RoundedCornerShape(st.corner.dp)).background(Color(st.panelText).copy(alpha = 0.07f))
@@ -240,7 +269,12 @@ private fun Field(value: String?, hint: String, dot: Int, modifier: Modifier, on
     ) {
         Box(Modifier.size(9.dp).clip(CircleShape).background(Color(dot)))
         Spacer(Modifier.width(8.dp))
-        MText(value ?: hint, size = 15.sp, color = if (value == null) Color(st.dim) else Color(st.panelText), maxLines = 1, modifier = Modifier.weight(1f))
+        MText(value ?: hint, size = 15.sp, color = if (value == null) Color(st.dim) else Color(st.panelText), maxLines = 1, modifier = Modifier.weight(1f, fill = false))
+        if (value != null && lineColor != null) {
+            Spacer(Modifier.width(6.dp))
+            Box(Modifier.size(width = 12.dp, height = 5.dp).clip(RoundedCornerShape(3.dp)).background(Color(lineColor)))
+        }
+        Spacer(Modifier.weight(1f))
         if (value != null) {
             Box(Modifier.size(28.dp).clip(CircleShape).clickable(onClick = onClear), contentAlignment = Alignment.Center) {
                 MText("✕", size = 14.sp, color = Color(st.dim))

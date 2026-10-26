@@ -17,16 +17,59 @@ import kotlin.math.sqrt
  *  - слабая привязка к реальным координатам сохраняет общую форму города.
  * Параметры подобраны на реальной схеме Москвы (≈450 станций, 22 линии).
  */
+/** Результат раскладки: позиции станций и эллипсы колец (cx, cy, a, b, угол). */
+class LayoutResult(val pos: List<Pair<Double, Double>>, val ellipses: List<DoubleArray>)
+
 object SchemeLayout {
+
+    /** Эллипс по точкам (через главные оси). Почти круг → круг. */
+    fun fitEllipse(xs: DoubleArray, ys: DoubleArray): DoubleArray {
+        val n = xs.size
+        val cx = xs.average(); val cy = ys.average()
+        var sxx = 0.0; var syy = 0.0; var sxy = 0.0
+        for (i in 0 until n) {
+            val dx = xs[i] - cx; val dy = ys[i] - cy
+            sxx += dx * dx; syy += dy * dy; sxy += dx * dy
+        }
+        sxx /= n; syy /= n; sxy /= n
+        val tr = sxx + syy
+        val det = sxx * syy - sxy * sxy
+        val disc = sqrt(maxOf(tr * tr / 4 - det, 0.0))
+        val l1 = tr / 2 + disc
+        val l2 = tr / 2 - disc
+        val th = 0.5 * atan2(2 * sxy, sxx - syy)
+        var a = sqrt(2 * maxOf(l1, 1e-9))
+        var b = sqrt(2 * maxOf(l2, 1e-9))
+        if (a / b < 1.12) { val r = (a + b) / 2; a = r; b = r }
+        return doubleArrayOf(cx, cy, a, b, th)
+    }
+
+    /** Сдвигает точки к эллипсу с силой k (1 — ровно на эллипс). */
+    fun projectToEllipse(ids: IntArray, x: DoubleArray, y: DoubleArray, k: Double): DoubleArray {
+        val xs = DoubleArray(ids.size) { x[ids[it]] }
+        val ys = DoubleArray(ids.size) { y[ids[it]] }
+        val e = fitEllipse(xs, ys)
+        val c = cos(e[4]); val s = sin(e[4])
+        for (j in ids.indices) {
+            val i = ids[j]
+            val dx = xs[j] - e[0]; val dy = ys[j] - e[1]
+            val u = dx * c + dy * s; val v = -dx * s + dy * c
+            val t = atan2(v / e[3], u / e[2])
+            val tu = e[2] * cos(t); val tv = e[3] * sin(t)
+            x[i] += (e[0] + tu * c - tv * s - x[i]) * k
+            y[i] += (e[1] + tu * s + tv * c - y[i]) * k
+        }
+        return e
+    }
 
     fun layout(
         init: List<Pair<Double, Double>>,
         segs: List<Pair<Int, Int>>,
         transfers: List<Pair<Int, Int>>,
         rings: List<List<Int>>
-    ): List<Pair<Double, Double>> {
+    ): LayoutResult {
         val n = init.size
-        if (n == 0) return emptyList()
+        if (n == 0) return LayoutResult(emptyList(), emptyList())
 
         // --- группы пересадок ---
         val parent = IntArray(n) { it }
@@ -109,23 +152,8 @@ object SchemeLayout {
                 y[i] += (my - y[i]) * 0.25
             }
 
-            // кольцевые линии → окружности
-            if (it > iters / 10) {
-                for (rg in ringG) {
-                    var cx = 0.0; var cy = 0.0
-                    for (i in rg) { cx += x[i]; cy += y[i] }
-                    cx /= rg.size; cy /= rg.size
-                    var r = 0.0
-                    for (i in rg) r += hypot(x[i] - cx, y[i] - cy)
-                    r /= rg.size
-                    for (i in rg) {
-                        val dx = x[i] - cx; val dy = y[i] - cy
-                        val d = hypot(dx, dy).coerceAtLeast(1e-6)
-                        x[i] += (cx + dx / d * r - x[i]) * 0.25
-                        y[i] += (cy + dy / d * r - y[i]) * 0.25
-                    }
-                }
-            }
+            // кольцевые линии → овалы/окружности
+            if (it > iters / 10) for (rg in ringG) projectToEllipse(rg, x, y, 0.25)
 
             // сетка для поиска соседей
             grid.clear()
@@ -211,6 +239,10 @@ object SchemeLayout {
                 out[mem[idx]] = (x[k] + r * cos(a)) to (y[k] + r * sin(a))
             }
         }
-        return out
+        // кольца — ровно на эллипс
+        val ox = DoubleArray(n) { out[it].first }
+        val oy = DoubleArray(n) { out[it].second }
+        val ellipses = rings.map { r -> projectToEllipse(r.toIntArray(), ox, oy, 1.0) }
+        return LayoutResult(List(n) { ox[it] to oy[it] }, ellipses)
     }
 }
