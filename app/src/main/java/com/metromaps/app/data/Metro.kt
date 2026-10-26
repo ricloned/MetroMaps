@@ -120,7 +120,7 @@ object MetroParser {
     fun build(city: JSONObject): Network {
         val linesArr = city.optJSONArray("lines") ?: JSONArray()
         // 1. сырые данные
-        val rawLines = ArrayList<Triple<JSONObject, List<RawSt>, Int>>()
+        val rawLines = ArrayList<Pair<JSONObject, List<RawSt>>>()
         for (i in 0 until linesArr.length()) {
             val l = linesArr.getJSONObject(i)
             val stArr = l.optJSONArray("stations") ?: JSONArray()
@@ -129,56 +129,48 @@ object MetroParser {
                 val s = stArr.getJSONObject(k)
                 val lat = s.optDouble("lat", Double.NaN)
                 val lon = s.optDouble("lng", Double.NaN)
-                if (lat.isNaN() || lon.isNaN()) continue
+                if (lat.isNaN() || lon.isNaN() || (lat == 0.0 && lon == 0.0)) continue
                 list += RawSt(s.optString("id"), s.optString("name").trim(), lat, lon, s.optInt("order", k))
             }
-            if (list.isNotEmpty()) rawLines += Triple(l, list.sortedBy { it.order }, i)
+            if (list.isNotEmpty()) rawLines += l to list.sortedBy { it.order }
         }
-        val all = rawLines.flatMap { it.second }
-        // 2. раскладка схемы: проекция в км + «рыбий глаз», чтобы центр не слипался
-        val lat0 = all.map { it.lat }.sorted().let { it[it.size / 2] }
-        val lon0 = all.map { it.lon }.sorted().let { it[it.size / 2] }
-        val kx = 111.32 * cos(Math.toRadians(lat0))
+        // отбрасываем станции с битыми координатами (далеко от остального города)
+        val allRaw = rawLines.flatMap { it.second }
+        if (allRaw.isEmpty()) return Network(city.optString("id"), city.optString("name").trim(), emptyList(), emptyList(), emptyList(), emptyList(), 1000f, 1000f)
+        val mLat = allRaw.map { it.lat }.sorted().let { it[it.size / 2] }
+        val mLon = allRaw.map { it.lon }.sorted().let { it[it.size / 2] }
+        val clean = rawLines.map { (l, list) -> l to list.filter { Geo.dist(it.lat, it.lon, mLat, mLon) < 120_000 } }
+            .filter { it.second.isNotEmpty() }
+
+        // 2. стартовая раскладка: проекция в км + «рыбий глаз»
+        val kx = 111.32 * cos(Math.toRadians(mLat))
         val ky = 110.57
-        val pts = all.map { (it.lon - lon0) * kx to (lat0 - it.lat) * ky }
-        val span = pts.maxOfOrNull { hypot(it.first, it.second) } ?: 1.0
-        val p = when {
-            span > 25 -> 0.6
-            span > 10 -> 0.75
-            else -> 0.9
-        }
-        val warped = pts.map { (x, y) ->
+        fun warp(lat: Double, lon: Double): Pair<Double, Double> {
+            val x = (lon - mLon) * kx
+            val y = (mLat - lat) * ky
             val r = hypot(x, y)
-            if (r < 1e-6) 0.0 to 0.0 else {
-                val a = atan2(y, x)
-                val rr = r.pow(p)
-                rr * cos(a) to rr * sin(a)
-            }
+            if (r < 1e-6) return 0.0 to 0.0
+            val a = atan2(y, x)
+            val rr = r.pow(0.6)
+            return rr * cos(a) to rr * sin(a)
         }
-        val minX = warped.minOf { it.first }; val maxX = warped.maxOf { it.first }
-        val minY = warped.minOf { it.second }; val maxY = warped.maxOf { it.second }
-        val size = 1000.0
-        val sc = size / maxOf(maxX - minX, maxY - minY, 1e-6)
-        val margin = 80f
-        // 3. станции и линии
+
+        // 3. станции и линии (координаты пока стартовые)
         val stations = ArrayList<Station>()
         val lines = ArrayList<Line>()
-        var gi = 0
-        for ((lj, list, _) in rawLines) {
+        for ((lj, list) in clean) {
             val li = lines.size
             val idxs = ArrayList<Int>()
             for (r in list) {
-                val (wx, wy) = warped[gi++]
-                val st = Station(
-                    idx = stations.size, id = r.id, name = r.name, lat = r.lat, lon = r.lon, line = li,
-                    x = margin + ((wx - minX) * sc).toFloat(), y = margin + ((wy - minY) * sc).toFloat()
-                )
+                val (wx, wy) = warp(r.lat, r.lon)
+                val st = Station(stations.size, r.id, r.name, r.lat, r.lon, li, wx.toFloat(), wy.toFloat())
                 stations += st
                 idxs += st.idx
             }
             val (segments, ring) = lineSegments(idxs, stations)
             lines += Line(li, lj.optString("id"), lj.optString("name").trim(), parseColor(lj.optString("hex_color")), idxs, segments, ring)
         }
+
         // 4. пересадки: рядом стоящие станции разных линий или одноимённые
         val transfers = ArrayList<Pair<Int, Int>>()
         for (i in stations.indices) for (j in i + 1 until stations.size) {
@@ -188,25 +180,42 @@ object MetroParser {
             val sameName = norm(a.name) == norm(b.name)
             if (d < 420 || (sameName && d < 1500)) transfers += i to j
         }
-        // 5. граф
-        val adj = List(stations.size) { ArrayList<Edge>() }
+
+        // 5. схематичная раскладка: ровные перегоны, без наложений, углы по 45°
+        val pos = SchemeLayout.layout(
+            stations.map { it.x.toDouble() to it.y.toDouble() },
+            lines.flatMap { it.segments },
+            transfers
+        )
+        val minX = pos.minOf { it.first }; val maxX = pos.maxOf { it.first }
+        val minY = pos.minOf { it.second }; val maxY = pos.maxOf { it.second }
+        val size = 1000.0
+        val sc = size / maxOf(maxX - minX, maxY - minY, 1e-6)
+        val margin = 40f
+        val placed = stations.map { st ->
+            val (x, y) = pos[st.idx]
+            st.copy(x = margin + ((x - minX) * sc).toFloat(), y = margin + ((y - minY) * sc).toFloat())
+        }
+
+        // 6. граф
+        val adj = List(placed.size) { ArrayList<Edge>() }
         for (l in lines) for ((a, b) in l.segments) {
-            val sa = stations[a]; val sb = stations[b]
+            val sa = placed[a]; val sb = placed[b]
             val km = Geo.dist(sa.lat, sa.lon, sb.lat, sb.lon) / 1000
             val t = maxOf(1.5, km / 0.6 + 0.8) // ~36 км/ч + стоянка
             adj[a] += Edge(b, t, EdgeKind.RIDE)
             adj[b] += Edge(a, t, EdgeKind.RIDE)
         }
         for ((a, b) in transfers) {
-            val sa = stations[a]; val sb = stations[b]
+            val sa = placed[a]; val sb = placed[b]
             val t = 3.0 + Geo.dist(sa.lat, sa.lon, sb.lat, sb.lon) / 80.0
             adj[a] += Edge(b, t, EdgeKind.TRANSFER)
             adj[b] += Edge(a, t, EdgeKind.TRANSFER)
         }
         return Network(
-            city.optString("id"), city.optString("name").trim(), lines, stations, transfers, adj,
-            (size * (maxX - minX) / maxOf(maxX - minX, maxY - minY)).toFloat() + 2 * margin,
-            (size * (maxY - minY) / maxOf(maxX - minX, maxY - minY)).toFloat() + 2 * margin
+            city.optString("id"), city.optString("name").trim(), lines, placed, transfers, adj,
+            ((maxX - minX) * sc).toFloat() + 2 * margin,
+            ((maxY - minY) * sc).toFloat() + 2 * margin
         )
     }
 

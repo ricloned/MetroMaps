@@ -254,12 +254,12 @@ private fun DrawScope.drawLabels(
     halo: Paint,
     hasRoute: Boolean
 ) {
-    val ts = 11f * density * (0.85f + 0.22f * sqrt(zoomK)).coerceIn(0.85f, 1.5f)
+    val ts = 9f * density * (0.9f + 0.2f * sqrt(zoomK)).coerceIn(0.9f, 1.45f)
     text.textSize = ts
     halo.textSize = ts
     text.color = st.text
     halo.color = st.halo
-    halo.strokeWidth = 3f * density
+    halo.strokeWidth = 2.4f * density
 
     // приоритет: начало/конец, маршрут, пересадки, остальные
     val order = net.stations.indices.sortedBy { i ->
@@ -271,13 +271,20 @@ private fun DrawScope.drawLabels(
         }
     }
     val placed = ArrayList<RectF>()
+    // точки станций тоже «заняты» — подписи на них не ложатся
+    val dotR = 3.5f * density
+    for (i in net.stations.indices) {
+        val q = sp(i)
+        if (q.x < -50 || q.y < -50 || q.x > size.width + 50 || q.y > size.height + 50) continue
+        placed += RectF(q.x - dotR, q.y - dotR, q.x + dotR, q.y + dotR)
+    }
     val seenNames = HashSet<String>()
     val nc = drawContext.canvas.nativeCanvas
-    val showAll = zoomK > 1.7f
+    val showAll = zoomK > 1.25f
     for (i in order) {
         val important = i == vm.from || i == vm.to || i in onRoute
         if (!showAll && !important && !net.isTransfer(i)) continue
-        if (hasRoute && !important && zoomK < 3f) continue
+        if (hasRoute && !important && zoomK < 4f) continue
         val p = sp(i)
         if (p.x < -200 || p.y < -50 || p.x > size.width + 50 || p.y > size.height + 50) continue
         var label = vm.name(i)
@@ -288,10 +295,15 @@ private fun DrawScope.drawLabels(
         if (gk in seenNames) continue
         val w = text.measureText(label)
         val h = ts
-        val dx = 7f * density
+        val dx = 6f * density
+        val dg = 4f * density
         val candidates = listOf(
             RectF(p.x + dx, p.y - h / 2, p.x + dx + w, p.y + h / 2),
             RectF(p.x - dx - w, p.y - h / 2, p.x - dx, p.y + h / 2),
+            RectF(p.x + dg, p.y - dg - h, p.x + dg + w, p.y - dg),
+            RectF(p.x + dg, p.y + dg, p.x + dg + w, p.y + dg + h),
+            RectF(p.x - dg - w, p.y - dg - h, p.x - dg, p.y - dg),
+            RectF(p.x - dg - w, p.y + dg, p.x - dg, p.y + dg + h),
             RectF(p.x - w / 2, p.y - dx - h, p.x + w / 2, p.y - dx),
             RectF(p.x - w / 2, p.y + dx, p.x + w / 2, p.y + dx + h)
         )
