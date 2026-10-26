@@ -114,7 +114,7 @@ fun SearchScreen(vm: MetroViewModel, forFrom: Boolean) {
                 val line = net.lines[s.line]
                 Row(
                     Modifier.fillMaxWidth().clickable {
-                        if (forFrom) vm.setFrom(i) else vm.setTo(i)
+                        if (forFrom) vm.chooseFrom(i) else vm.chooseTo(i)
                         vm.screen = Screen.MAP
                     }.padding(horizontal = 20.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -165,9 +165,9 @@ fun SettingsScreen(vm: MetroViewModel) {
         CompositionLocalProvider(LocalMetro provides st.copy(panelText = st.text)) {
             SettingRow("Город", vm.network?.cityName ?: "—") { vm.screen = Screen.CITY }
             SettingRow("Стиль схемы", st.name) { vm.screen = Screen.STYLES }
-            SettingRow("Язык схемы", if (vm.latin) "Латиница" else "Русский") { vm.setLatin(!vm.latin) }
+            SettingRow("Язык схемы", if (vm.latin) "Латиница" else "Русский") { vm.changeLatin(!vm.latin) }
             Divider()
-            ToggleRow("Проверять обновления", vm.autoUpdate, "при запуске смотреть новый релиз на GitHub") { vm.setAutoUpdate(it) }
+            ToggleRow("Проверять обновления", vm.autoUpdate, "при запуске смотреть новый релиз на GitHub") { vm.changeAutoUpdate(it) }
             val status = when (vm.updateState) {
                 UpdateState.CHECKING -> "проверяю…"
                 UpdateState.AVAILABLE -> "есть ${vm.update?.name ?: "новая версия"}"

@@ -176,26 +176,26 @@ class MetroViewModel(app: Application) : AndroidViewModel(app) {
         sp.edit().putString("style", id).apply()
     }
 
-    fun setLatin(v: Boolean) {
+    fun changeLatin(v: Boolean) {
         latin = v
         sp.edit().putBoolean("latin", v).apply()
     }
 
-    fun setAutoUpdate(v: Boolean) {
+    fun changeAutoUpdate(v: Boolean) {
         autoUpdate = v
         sp.edit().putBoolean("autoUpdate", v).apply()
     }
 
     // ---------------- маршрут ----------------
 
-    fun setFrom(i: Int?) {
+    fun chooseFrom(i: Int?) {
         from = i
         if (i != null && i == to) to = null
         picked = null
         recompute()
     }
 
-    fun setTo(i: Int?) {
+    fun chooseTo(i: Int?) {
         to = i
         if (i != null && i == from) from = null
         picked = null
@@ -280,7 +280,7 @@ class MetroViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         myStation = i
-        if (from == null) setFrom(i)
+        if (from == null) chooseFrom(i)
         focusStation = i
         focusStamp++
         message = "Ближайшая: ${name(i)} · ${if (d < 1000) "${d.toInt()} м" else String.format("%.1f км", d / 1000)}"

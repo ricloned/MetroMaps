@@ -201,8 +201,8 @@ private fun BottomPanel(vm: MetroViewModel) {
             }
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MButton("Отсюда", { vm.setFrom(picked) }, Modifier.weight(1f), primary = true)
-                MButton("Сюда", { vm.setTo(picked) }, Modifier.weight(1f), primary = true)
+                MButton("Отсюда", { vm.chooseFrom(picked) }, Modifier.weight(1f), primary = true)
+                MButton("Сюда", { vm.chooseTo(picked) }, Modifier.weight(1f), primary = true)
             }
             Spacer(Modifier.height(10.dp))
         }
@@ -215,10 +215,10 @@ private fun BottomPanel(vm: MetroViewModel) {
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             Field(vm.from?.let { vm.name(it) }, "Откуда", st.markA, Modifier.weight(1f),
-                onClick = { vm.screen = Screen.SEARCH_FROM }, onClear = { vm.setFrom(null) })
+                onClick = { vm.screen = Screen.SEARCH_FROM }, onClear = { vm.chooseFrom(null) })
             Spacer(Modifier.width(8.dp))
             Field(vm.to?.let { vm.name(it) }, "Куда", st.markB, Modifier.weight(1f),
-                onClick = { vm.screen = Screen.SEARCH_TO }, onClear = { vm.setTo(null) })
+                onClick = { vm.screen = Screen.SEARCH_TO }, onClear = { vm.chooseTo(null) })
             Spacer(Modifier.width(6.dp))
             Box(Modifier.size(40.dp).clip(CircleShape).clickable { vm.swap() }, contentAlignment = Alignment.Center) {
                 MText("⇄", size = 22.sp, color = Color(st.dim))
