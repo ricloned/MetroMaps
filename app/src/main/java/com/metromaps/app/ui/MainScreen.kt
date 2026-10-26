@@ -125,7 +125,10 @@ private fun MapScreen(vm: MetroViewModel) {
 
         if (vm.network == null) {
             Column(Modifier.align(Alignment.Center).padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (vm.loading) MText("Загружаю схему…", size = 16.sp, color = Color(st.text))
+                if (vm.loading || vm.error == null) {
+                    val cityName = vm.cities.firstOrNull { it.id == vm.cityId }?.name ?: ""
+                    MText("Загружаю схему $cityName…", size = 16.sp, color = Color(st.text))
+                }
                 vm.error?.let {
                     MText(it, size = 14.sp, color = Color(st.text))
                     Spacer(Modifier.height(12.dp))
@@ -141,7 +144,7 @@ private fun MapScreen(vm: MetroViewModel) {
                     Modifier.clip(RoundedCornerShape(st.corner.dp)).background(Color(st.panel))
                         .clickable { vm.screen = Screen.CITY }.padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
-                    MText((vm.network?.cityName ?: "Город") + "  ▾", size = 17.sp, title = true, weight = FontWeight.Bold)
+                    MText((vm.cities.firstOrNull { it.id == vm.cityId }?.name ?: vm.network?.cityName ?: "Город") + "  ▾", size = 17.sp, title = true, weight = FontWeight.Bold)
                 }
                 Spacer(Modifier.weight(1f))
                 RoundIconButton({ vm.screen = Screen.SETTINGS }) { MenuIcon(Color(st.panelText)) }
@@ -190,7 +193,7 @@ private fun BottomPanel(vm: MetroViewModel) {
     Column(
         Modifier.fillMaxWidth().clip(shape).background(Color(st.panel)).padding(14.dp)
     ) {
-        val picked = vm.picked
+        val picked = vm.picked?.takeIf { it in (vm.network?.stations?.indices ?: IntRange.EMPTY) }
         if (picked != null) {
             val net = vm.network
             val line = net?.lines?.getOrNull(net.stations[picked].line)

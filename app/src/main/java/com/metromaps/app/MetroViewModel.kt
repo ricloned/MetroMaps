@@ -135,49 +135,76 @@ class MetroViewModel(app: Application) : AndroidViewModel(app) {
                     if (cached == null) error = "Не удалось загрузить схему: ${e.message}. Проверь интернет и нажми «Повторить»."
                 }
             }
-            loading = false
+            if (buildJob?.isActive != true) loading = false
         }
     }
 
     fun retry() = load()
 
+    /** Разобранный список всех городов — парсим один раз. */
+    private var allArr: org.json.JSONArray? = null
+    private var buildJob: kotlinx.coroutines.Job? = null
+
     private suspend fun apply(json: String) {
         allJson = json
-        val list = withContext(Dispatchers.Default) { runCatching { MetroParser.cities(json) }.getOrDefault(emptyList()) }
-        cities = list
-        if (list.none { it.id == cityId } && list.isNotEmpty()) cityId = list.first().id
-        buildCity()
+        val parsed = withContext(Dispatchers.Default) {
+            runCatching { org.json.JSONArray(json) to MetroParser.cities(json) }.getOrNull()
+        } ?: return
+        allArr = parsed.first
+        cities = parsed.second
+        if (parsed.second.none { it.id == cityId } && parsed.second.isNotEmpty()) cityId = parsed.second.first().id
+        startBuild(keepSelection = true)
     }
 
-    private suspend fun buildCity() {
-        val json = allJson ?: return
+    private fun resetSelection() {
+        from = null; to = null; route = null; routes = emptyList(); routeIndex = 0
+        picked = null; myStation = null; focusStation = null
+    }
+
+    /** Строит схему текущего города. Предыдущий незаконченный расчёт отменяется. */
+    private fun startBuild(keepSelection: Boolean) {
+        val arr = allArr ?: return
         val id = cityId
-        val net = withContext(Dispatchers.Default) {
-            runCatching {
-                val cached = repo.loadLayout(id)
-                MetroParser.cityJson(json, id)?.let { c ->
-                    val n = MetroParser.build(c, cached)
-                    val fresh = MetroParser.lastLayout
-                    if (fresh != null && fresh.key != cached?.key) repo.saveLayout(id, fresh)
-                    n
+        buildJob?.cancel()
+        if (network?.cityId != id) {
+            // не показываем старый город, пока считается новый
+            resetSelection()
+            network = null
+        } else if (!keepSelection) resetSelection()
+        buildJob = viewModelScope.launch {
+            loading = true
+            val res = withContext(Dispatchers.Default) {
+                runCatching {
+                    val cached = repo.loadLayout(id)
+                    MetroParser.cityJson(arr, id)?.let { c ->
+                        val (n, fresh) = MetroParser.buildWithLayout(c, cached)
+                        if (fresh != null && fresh.key != cached?.key) repo.saveLayout(id, fresh)
+                        n
+                    }
                 }
-            }.getOrNull()
-        }
-        if (net != null) {
-            val same = network?.cityId == net.cityId
-            network = net
-            if (!same) {
-                from = null; to = null; route = null; routes = emptyList(); picked = null; myStation = null
-                fitStamp++
             }
+            // пока считали, пользователь мог выбрать другой город — тогда результат не нужен
+            if (id != cityId) return@launch
+            val net = res.getOrNull()
+            if (net == null) {
+                error = "Не удалось построить схему: ${res.exceptionOrNull()?.message ?: "нет данных"}"
+            } else {
+                val same = network?.cityId == net.cityId
+                if (!same) resetSelection()
+                network = net
+                error = null
+                if (!same) fitStamp++
+            }
+            loading = false
         }
     }
 
     fun selectCity(id: String) {
+        screen = Screen.MAP
+        if (id == cityId && network?.cityId == id) return
         cityId = id
         sp.edit().putString("city", id).apply()
-        screen = Screen.MAP
-        viewModelScope.launch { buildCity() }
+        startBuild(keepSelection = false)
     }
 
     fun refreshData() {
@@ -190,7 +217,7 @@ class MetroViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 message = "Не удалось обновить: ${e.message}"
             }
-            loading = false
+            if (buildJob?.isActive != true) loading = false
         }
     }
 

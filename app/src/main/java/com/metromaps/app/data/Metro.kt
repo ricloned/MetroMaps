@@ -174,6 +174,22 @@ object MetroParser {
         return out.sortedWith(compareByDescending<CityInfo> { it.stations }.thenBy { it.name })
     }
 
+    /** Сборка схемы и её раскладки за один вызов (по одному за раз). */
+    @Synchronized
+    fun buildWithLayout(city: JSONObject, cache: LayoutCache?): Pair<Network, LayoutCache?> {
+        lastLayout = null
+        val n = build(city, cache)
+        return n to lastLayout
+    }
+
+    fun cityJson(arr: JSONArray, cityId: String): JSONObject? {
+        for (i in 0 until arr.length()) {
+            val c = arr.optJSONObject(i) ?: continue
+            if (c.optString("id") == cityId) return c
+        }
+        return null
+    }
+
     fun cityJson(allJson: String, cityId: String): JSONObject? {
         val arr = JSONArray(allJson)
         for (i in 0 until arr.length()) {

@@ -70,7 +70,7 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
         val w = viewSize.width.toFloat()
         val h = viewSize.height.toFloat()
         fitScale = min(w / net.width, h / net.height)
-        val r = vm.route
+        val r = vm.route?.takeIf { rr -> rr.path.isNotEmpty() && rr.path.all { it in net.stations.indices } }
         if (r != null) {
             val pts = r.path.map { net.stations[it] }
             fitTo(pts.minOf { it.x }, pts.minOf { it.y }, pts.maxOf { it.x }, pts.maxOf { it.y }, 70 * density)
@@ -94,7 +94,7 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
 
     LaunchedEffect(vm.focusStamp) {
         val i = vm.focusStation ?: return@LaunchedEffect
-        if (viewSize.width == 0) return@LaunchedEffect
+        if (viewSize.width == 0 || i !in net.stations.indices) return@LaunchedEffect
         val s = net.stations[i]
         scale = max(scale, fitScale * 3f)
         offset = Offset(viewSize.width / 2f - s.x * scale, (viewSize.height - bottomInsetPx) / 2f - s.y * scale)
@@ -152,7 +152,7 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
             return Offset(offset.x + s.x * scale, offset.y + s.y * scale)
         }
 
-        val route = vm.route
+        val route = vm.route?.takeIf { r -> r.path.all { it in net.stations.indices } }
         val onRoute = route?.path?.toHashSet() ?: emptySet()
         val routeSegs = HashSet<Long>()
         route?.legs?.forEach { leg ->
@@ -217,17 +217,18 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
         drawLabels(vm, net, st, zoomK, density, ::sp, onRoute, textPaint, haloPaint, route != null)
 
         // --- метки ---
-        vm.myStation?.let { i ->
+        val valid = net.stations.indices
+        vm.myStation?.takeIf { it in valid }?.let { i ->
             val p = sp(i)
             drawCircle(Color(st.me).copy(alpha = 0.25f), 16 * density, p)
             drawCircle(Color.White, 8 * density, p)
             drawCircle(Color(st.me), 6 * density, p)
         }
-        vm.picked?.let { i ->
+        vm.picked?.takeIf { it in valid }?.let { i ->
             drawCircle(Color(st.accent), lw * 2.4f, sp(i), style = Stroke(2.5f * density))
         }
-        vm.from?.let { drawMark(sp(it), "A", Color(st.markA), density, markPaint) }
-        vm.to?.let { drawMark(sp(it), "B", Color(st.markB), density, markPaint) }
+        vm.from?.takeIf { it in valid }?.let { drawMark(sp(it), "A", Color(st.markA), density, markPaint) }
+        vm.to?.takeIf { it in valid }?.let { drawMark(sp(it), "B", Color(st.markB), density, markPaint) }
 
         drawOverlayFx(st, density)
     }
