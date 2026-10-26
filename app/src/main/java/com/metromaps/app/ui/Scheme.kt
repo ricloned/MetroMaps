@@ -77,6 +77,15 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
             offset = Offset(w / 2 - cx * scale, (h - bottomInsetPx) / 2 - cy * scale)
         } else {
             fitTo(0f, 0f, net.width, net.height, 8 * density)
+            // большие города открываем чуть приближенными к центру (без далёких пригородов)
+            if (net.stations.size > 150) {
+                val xs = net.stations.map { it.x }.sorted()
+                val ys = net.stations.map { it.y }.sorted()
+                val cx = xs[xs.size / 2]
+                val cy = ys[ys.size / 2]
+                scale *= 1.7f
+                offset = Offset(w / 2 - cx * scale, (h - bottomInsetPx) / 2 - cy * scale)
+            }
         }
     }
 
@@ -132,7 +141,8 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
         drawBackgroundFx(st, density)
 
         val zoomK = scale / fitScale
-        val lw = st.lineWidth * density * (0.6f + 0.4f * sqrt(zoomK)).coerceAtMost(2.4f)
+        // линии тонкие на общем виде и толще при приближении, как в навигаторах
+        val lw = st.lineWidth * density * (0.3f + 0.3f * sqrt(zoomK)).coerceIn(0.5f, 1.5f)
         fun sp(i: Int): Offset {
             val s = net.stations[i]
             return Offset(offset.x + s.x * scale, offset.y + s.y * scale)
@@ -167,11 +177,13 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
         // --- пересадки ---
         val tStroke = Color(st.transferStroke)
         val tFill = Color(st.transferFill)
-        for ((a, b) in net.transfers) {
+        val outline = (1.1f * density).coerceAtMost(lw * 0.35f)
+        val tr = lw * 0.62f // радиус кружка пересадки — чуть больше половины линии
+        for ((a, b) in net.links) {
             val alpha = if (route == null || (a in onRoute && b in onRoute)) 1f else fade
             val pa = sp(a); val pb = sp(b)
-            drawLine(tStroke.copy(alpha = alpha), pa, pb, lw * 2.3f, StrokeCap.Round)
-            drawLine(tFill.copy(alpha = alpha), pa, pb, lw * 2.3f - 2.4f * density, StrokeCap.Round)
+            drawLine(tStroke.copy(alpha = alpha), pa, pb, 2 * tr + outline, StrokeCap.Round)
+            drawLine(tFill.copy(alpha = alpha), pa, pb, 2 * tr - outline, StrokeCap.Round)
         }
 
         // --- станции ---
@@ -181,11 +193,12 @@ fun Scheme(vm: MetroViewModel, bottomInsetPx: Float, modifier: Modifier = Modifi
             val alpha = if (route == null || s.idx in onRoute) 1f else fade
             val col = Color(MetroStyles.lineColor(st, net.lines[s.line].color, s.line)).copy(alpha = alpha)
             if (net.isTransfer(s.idx)) {
-                shape(st.shape, p, lw * 1.05f, tFill.copy(alpha = alpha))
-                shapeStroke(st.shape, p, lw * 1.05f, tStroke.copy(alpha = alpha), 2f * density)
+                shape(st.shape, p, tr, tFill.copy(alpha = alpha))
+                shapeStroke(st.shape, p, tr, tStroke.copy(alpha = alpha), outline)
+                shape(st.shape, p, tr * 0.42f, col)
             } else {
-                shape(st.shape, p, lw * 0.95f, col)
-                shape(st.shape, p, lw * 0.42f, Color(st.bg).copy(alpha = alpha))
+                // обычная станция — маленькая точка на линии
+                shape(st.shape, p, lw * 0.32f, Color(st.transferFill).copy(alpha = alpha))
             }
         }
 
@@ -254,12 +267,12 @@ private fun DrawScope.drawLabels(
     halo: Paint,
     hasRoute: Boolean
 ) {
-    val ts = 9f * density * (0.9f + 0.2f * sqrt(zoomK)).coerceIn(0.9f, 1.45f)
+    val ts = 7f * density * (0.85f + 0.3f * sqrt(zoomK)).coerceIn(0.9f, 1.7f)
     text.textSize = ts
     halo.textSize = ts
     text.color = st.text
     halo.color = st.halo
-    halo.strokeWidth = 2.4f * density
+    halo.strokeWidth = 2f * density
 
     // приоритет: начало/конец, маршрут, пересадки, остальные
     val order = net.stations.indices.sortedBy { i ->
@@ -272,7 +285,7 @@ private fun DrawScope.drawLabels(
     }
     val placed = ArrayList<RectF>()
     // точки станций тоже «заняты» — подписи на них не ложатся
-    val dotR = 3.5f * density
+    val dotR = 2.5f * density
     for (i in net.stations.indices) {
         val q = sp(i)
         if (q.x < -50 || q.y < -50 || q.x > size.width + 50 || q.y > size.height + 50) continue
@@ -280,7 +293,7 @@ private fun DrawScope.drawLabels(
     }
     val seenNames = HashSet<String>()
     val nc = drawContext.canvas.nativeCanvas
-    val showAll = zoomK > 1.25f
+    val showAll = true
     for (i in order) {
         val important = i == vm.from || i == vm.to || i in onRoute
         if (!showAll && !important && !net.isTransfer(i)) continue
@@ -295,8 +308,8 @@ private fun DrawScope.drawLabels(
         if (gk in seenNames) continue
         val w = text.measureText(label)
         val h = ts
-        val dx = 6f * density
-        val dg = 4f * density
+        val dx = 5f * density
+        val dg = 3f * density
         val candidates = listOf(
             RectF(p.x + dx, p.y - h / 2, p.x + dx + w, p.y + h / 2),
             RectF(p.x - dx - w, p.y - h / 2, p.x - dx, p.y + h / 2),

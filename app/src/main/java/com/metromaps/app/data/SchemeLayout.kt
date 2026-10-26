@@ -5,23 +5,25 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.hypot
-import kotlin.math.round
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * Превращает географию в «схему метро»:
  *  - пересадочные станции собираются в один узел;
- *  - все перегоны тянутся к одинаковой длине (окраины сжимаются, центр раздвигается);
- *  - узлы расталкиваются, чтобы не налезать друг на друга;
- *  - отрезки поворачиваются к углам, кратным 45°;
+ *  - перегоны тянутся к одинаковой длине (окраины сжимаются, центр раздвигается);
+ *  - линии выпрямляются, кольцевые линии держатся окружностями;
+ *  - узлы расталкиваются и не ложатся на чужие линии;
  *  - слабая привязка к реальным координатам сохраняет общую форму города.
+ * Параметры подобраны на реальной схеме Москвы (≈450 станций, 22 линии).
  */
 object SchemeLayout {
 
     fun layout(
         init: List<Pair<Double, Double>>,
         segs: List<Pair<Int, Int>>,
-        transfers: List<Pair<Int, Int>>
+        transfers: List<Pair<Int, Int>>,
+        rings: List<List<Int>>
     ): List<Pair<Double, Double>> {
         val n = init.size
         if (n == 0) return emptyList()
@@ -73,20 +75,21 @@ object SchemeLayout {
         }
         val x0 = x.copyOf()
         val y0 = y.copyOf()
-        // крупные узлы занимают больше места
-        val rad = DoubleArray(g) { 0.7 + 0.12 * (members[it].size - 1) }
-        // соседи узла — для выпрямления линий
+        val rad = DoubleArray(g) { 0.7 + 0.1 * (members[it].size - 1) }
         val nb = Array(g) { ArrayList<Int>(2) }
         for (e in 0 until m) { nb[ea[e]] += eb[e]; nb[eb[e]] += ea[e] }
+        val ringG: List<IntArray> = rings.map { r -> r.map { gid[it] }.distinct().toIntArray() }.filter { it.size > 3 }
 
-        val iters = if (g > 250) 450 else 350
-        val cell = 1.4
+        val iters = 500
+        val cell = 1.6
+        val ne = 0.55 // насколько близко станция может подойти к чужому перегону
         val grid = HashMap<Long, ArrayList<Int>>()
+        fun cellKey(cx: Long, cy: Long): Long = (cx shl 32) xor (cy and 0xFFFFFFFFL)
+
         for (it in 0 until iters) {
             val t = 1.0 - it.toDouble() / iters
 
-            // пружины: короткий перегон сильно удлиняем, длинный мягко стягиваем —
-            // так центр (кольцо и всё внутри) может раздвинуться
+            // пружины: короткий перегон сильно удлиняем, длинный мягко стягиваем
             for (e in 0 until m) {
                 val a = ea[e]; val b = eb[e]
                 val dx = x[b] - x[a]; val dy = y[b] - y[a]
@@ -96,44 +99,44 @@ object SchemeLayout {
                 x[b] -= dx * f; y[b] -= dy * f
             }
 
-            // углы по 45°
-            if (it > iters / 3) {
-                val k = 0.08 + 0.17 * (it - iters / 3).toDouble() / (iters - iters / 3)
-                for (e in 0 until m) {
-                    val a = ea[e]; val b = eb[e]
-                    val dx = x[b] - x[a]; val dy = y[b] - y[a]
-                    val d = hypot(dx, dy)
-                    if (d < 1e-6) continue
-                    val ang = atan2(dy, dx)
-                    val snap = round(ang / (PI / 4)) * (PI / 4)
-                    val cx = (cos(snap) * d - dx) * 0.5 * k
-                    val cy = (sin(snap) * d - dy) * 0.5 * k
-                    x[b] += cx; y[b] += cy
-                    x[a] -= cx; y[a] -= cy
-                }
-            }
-
             // выпрямление: промежуточная станция тянется к середине между соседями
             for (i in 0 until g) {
                 val nbi = nb[i]
                 if (nbi.size != 2) continue
                 val mx = (x[nbi[0]] + x[nbi[1]]) / 2
                 val my = (y[nbi[0]] + y[nbi[1]]) / 2
-                x[i] += (mx - x[i]) * 0.12
-                y[i] += (my - y[i]) * 0.12
+                x[i] += (mx - x[i]) * 0.15
+                y[i] += (my - y[i]) * 0.15
             }
 
-            // расталкивание (через сетку, чтобы было быстро)
-            grid.clear()
-            for (i in 0 until g) {
-                val key = (floor(x[i] / cell).toLong() shl 32) xor (floor(y[i] / cell).toLong() and 0xFFFFFFFFL)
-                grid.getOrPut(key) { ArrayList() } += i
+            // кольцевые линии → окружности
+            if (it > iters / 10) {
+                for (rg in ringG) {
+                    var cx = 0.0; var cy = 0.0
+                    for (i in rg) { cx += x[i]; cy += y[i] }
+                    cx /= rg.size; cy /= rg.size
+                    var r = 0.0
+                    for (i in rg) r += hypot(x[i] - cx, y[i] - cy)
+                    r /= rg.size
+                    for (i in rg) {
+                        val dx = x[i] - cx; val dy = y[i] - cy
+                        val d = hypot(dx, dy).coerceAtLeast(1e-6)
+                        x[i] += (cx + dx / d * r - x[i]) * 0.25
+                        y[i] += (cy + dy / d * r - y[i]) * 0.25
+                    }
+                }
             }
+
+            // сетка для поиска соседей
+            grid.clear()
+            for (i in 0 until g) grid.getOrPut(cellKey(floor(x[i] / cell).toLong(), floor(y[i] / cell).toLong())) { ArrayList() } += i
+
+            // расталкивание узлов
             for (i in 0 until g) {
                 val cx = floor(x[i] / cell).toLong()
                 val cy = floor(y[i] / cell).toLong()
                 for (ox in -1L..1L) for (oy in -1L..1L) {
-                    val list = grid[((cx + ox) shl 32) xor ((cy + oy) and 0xFFFFFFFFL)] ?: continue
+                    val list = grid[cellKey(cx + ox, cy + oy)] ?: continue
                     for (j in list) {
                         if (j <= i) continue
                         val dx = x[j] - x[i]; val dy = y[j] - y[i]
@@ -150,15 +153,46 @@ object SchemeLayout {
                 }
             }
 
-            // слабая привязка к географии
+            // станции не лежат на чужих перегонах
+            if (it % 2 == 0) {
+                for (e in 0 until m) {
+                    val a = ea[e]; val b = eb[e]
+                    val ax = x[a]; val ay = y[a]; val bx = x[b]; val by = y[b]
+                    val vx = bx - ax; val vy = by - ay
+                    val l2 = vx * vx + vy * vy
+                    if (l2 < 1e-9) continue
+                    val c0x = floor((minOf(ax, bx) - ne) / cell).toLong(); val c1x = floor((maxOf(ax, bx) + ne) / cell).toLong()
+                    val c0y = floor((minOf(ay, by) - ne) / cell).toLong(); val c1y = floor((maxOf(ay, by) + ne) / cell).toLong()
+                    for (gx in c0x..c1x) for (gy in c0y..c1y) {
+                        val list = grid[cellKey(gx, gy)] ?: continue
+                        for (j in list) {
+                            if (j == a || j == b) continue
+                            val tt = ((x[j] - ax) * vx + (y[j] - ay) * vy) / l2
+                            if (tt <= 0.05 || tt >= 0.95) continue
+                            var dx = x[j] - (ax + tt * vx)
+                            var dy = y[j] - (ay + tt * vy)
+                            var d = hypot(dx, dy)
+                            if (d >= ne) continue
+                            if (d < 1e-4) { dx = -vy; dy = vx; d = sqrt(l2) }
+                            val push = (ne - d) * 0.3
+                            val ux = dx / d; val uy = dy / d
+                            x[j] += ux * push; y[j] += uy * push
+                            x[a] -= ux * push * 0.5; y[a] -= uy * push * 0.5
+                            x[b] -= ux * push * 0.5; y[b] -= uy * push * 0.5
+                        }
+                    }
+                }
+            }
+
+            // слабая привязка к географии в начале
             val anchor = if (it < iters * 0.4) 0.004 * t else 0.0
-            for (i in 0 until g) {
+            if (anchor > 0) for (i in 0 until g) {
                 x[i] += (x0[i] - x[i]) * anchor
                 y[i] += (y0[i] - y[i]) * anchor
             }
         }
 
-        // --- раскладываем станции внутри пересадочного узла ---
+        // --- станции внутри пересадочного узла ---
         val out = ArrayList<Pair<Double, Double>>(n)
         repeat(n) { out += 0.0 to 0.0 }
         for (k in 0 until g) {
@@ -167,10 +201,9 @@ object SchemeLayout {
                 out[mem[0]] = x[k] to y[k]
                 continue
             }
-            val r = if (mem.size == 2) 0.2 else 0.3
+            val r = if (mem.size == 2) 0.16 else 0.24
             val mx = mem.sumOf { init[it].first } / mem.size
             val my = mem.sumOf { init[it].second } / mem.size
-            // порядок вокруг центра — как в реальности
             val angles = mem.map { atan2(init[it].second - my, init[it].first - mx) }
             val sorted = mem.indices.sortedBy { angles[it] }
             sorted.forEachIndexed { pos, idx ->

@@ -63,7 +63,7 @@ object MetroStyles {
         bg = c(0xFF4C5340), text = c(0xFFFFFFFF), halo = c(0xFF000000), dim = c(0xFFB8B8A8),
         panel = c(0xE6000000), panelText = c(0xFFE0E0E0), accent = c(0xFFE1B84C), onAccent = c(0xFF000000),
         markA = c(0xFFD23C3C), markB = c(0xFFE1B84C), me = c(0xFFFFFFFF),
-        transferFill = c(0xFF000000), transferStroke = c(0xFFFFFFFF), lineWidth = 6f,
+        transferFill = c(0xFFFFFFFF), transferStroke = c(0xFF000000), lineWidth = 6f,
         shape = StationShape.SQUARE, upper = true, corner = 0,
         fontRes = R.font.oswald, titleFontRes = R.font.bangers, fx = setOf(Fx.VIGNETTE), squareCaps = true
     )
